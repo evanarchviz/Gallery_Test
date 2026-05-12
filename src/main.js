@@ -1,10 +1,9 @@
 import * as THREE from "https://unpkg.com/three@0.160.0/build/three.module.js";
 import { GLTFLoader } from "https://unpkg.com/three@0.160.0/examples/jsm/loaders/GLTFLoader.js";
-import { PointerLockControls } from "https://unpkg.com/three@0.160.0/examples/jsm/controls/PointerLockControls.js";
 import { MeshoptDecoder } from "https://unpkg.com/three@0.160.0/examples/jsm/libs/meshopt_decoder.module.js";
 import { RGBELoader } from "https://unpkg.com/three@0.160.0/examples/jsm/loaders/RGBELoader.js";
 
-let scene, camera, renderer, controls;
+let scene, camera, renderer;
 let model;
 let clock = new THREE.Clock();
 
@@ -14,6 +13,7 @@ let isMobile = false;
 
 let yawObject;
 let pitchObject;
+let pitch = 0;
 
 const playerHeight = 1.7;
 const playerRadius = 0.35;
@@ -26,20 +26,19 @@ const SPAWN = new THREE.Vector3(-8.7799, 6.67481, 12.5123);
 init();
 
 function detectMobile() {
-    const hasMouse =
-        window.matchMedia("(pointer:fine)").matches &&
-        window.matchMedia("(hover:hover)").matches;
+    const uaMobile = /Android|iPhone|iPad|iPod|Opera Mini|IEMobile/i.test(navigator.userAgent);
+    const coarsePointer = window.matchMedia("(pointer: coarse)").matches;
+    const smallScreen = window.innerWidth < 900;
 
-    return !hasMouse;
+    return uaMobile || (coarsePointer && smallScreen);
 }
 
 async function init(){
 
-    console.log("INIT START");
-
     isMobile = detectMobile();
     console.log("isMobile:", isMobile);
 
+    const container = document.getElementById("container") || document.body;
     const startScreen = document.getElementById("startScreen");
     const controlsText = document.getElementById("controlsText");
 
@@ -62,9 +61,6 @@ async function init(){
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.setSize(window.innerWidth, window.innerHeight);
-
-    // Safe append: works whether #container exists or not.
-    const container = document.getElementById("container") || document.body;
     container.appendChild(renderer.domElement);
 
     window.addEventListener("resize", () => {
@@ -76,18 +72,27 @@ async function init(){
     yawObject = new THREE.Object3D();
     pitchObject = new THREE.Object3D();
 
+    yawObject.position.copy(SPAWN);
     yawObject.add(pitchObject);
     pitchObject.add(camera);
     scene.add(yawObject);
 
-    yawObject.position.copy(SPAWN);
+    playerBaseY = SPAWN.y - playerHeight;
 
-    const rgbeLoader = new RGBELoader();
-    rgbeLoader.setPath("assets/");
-    rgbeLoader.load("fouriesburg_mountain_midday_2k.hdr", (hdrTexture) => {
-        hdrTexture.mapping = THREE.EquirectangularReflectionMapping;
-        scene.background = hdrTexture;
-    });
+    const pmrem = new THREE.PMREMGenerator(renderer);
+
+    new RGBELoader()
+        .setPath("assets/")
+        .load("fouriesburg_mountain_midday_2k.hdr", (hdrTexture) => {
+            hdrTexture.mapping = THREE.EquirectangularReflectionMapping;
+            hdrTexture.center.set(0.5, 0.5);
+            hdrTexture.rotation = Math.PI / 2;
+
+            scene.background = hdrTexture;
+            scene.environment = pmrem.fromEquirectangular(hdrTexture).texture;
+
+            pmrem.dispose();
+        });
 
     await MeshoptDecoder.ready;
 
@@ -119,53 +124,49 @@ async function init(){
         });
 
         scene.add(model);
-        playerBaseY = SPAWN.y - playerHeight;
-
-        console.log("GLB LOADED");
+        console.log("GLB loaded");
     });
 
-    controls = new PointerLockControls(camera, document.body);
-
     if (!isMobile) {
-        if (startScreen) {
-            startScreen.addEventListener("click", () => {
-                controls.lock();
-            });
-        }
 
-        controls.addEventListener("lock", () => {
-            console.log("POINTER LOCKED");
-
-            if (startScreen) {
-                startScreen.style.display = "none";
-            }
-
-            canMove = true;
+        startScreen.addEventListener("click", () => {
+            document.body.requestPointerLock();
         });
 
-        controls.addEventListener("unlock", () => {
-            if (startScreen) {
+        document.addEventListener("pointerlockchange", () => {
+            if (document.pointerLockElement === document.body) {
+                startScreen.style.display = "none";
+                canMove = true;
+            } else {
                 startScreen.style.display = "flex";
+                canMove = false;
             }
+        });
 
-            canMove = false;
+        document.addEventListener("mousemove", (e) => {
+            if (document.pointerLockElement !== document.body) return;
+
+            yawObject.rotation.y -= e.movementX * 0.002;
+
+            pitch -= e.movementY * 0.002;
+            pitch = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, pitch));
+            pitchObject.rotation.x = pitch;
         });
 
     } else {
-        if (startScreen) {
-            startScreen.addEventListener("click", async () => {
-                startScreen.style.display = "none";
-                canMove = true;
 
-                if (document.documentElement.requestFullscreen) {
-                    try {
-                        await document.documentElement.requestFullscreen();
-                    } catch(e) {}
-                }
+        startScreen.addEventListener("click", async () => {
+            startScreen.style.display = "none";
+            canMove = true;
 
-                setupMobileControls();
-            });
-        }
+            if (document.documentElement.requestFullscreen) {
+                try {
+                    await document.documentElement.requestFullscreen();
+                } catch(e) {}
+            }
+
+            setupMobileControls();
+        });
     }
 
     document.addEventListener("keydown", (e) => {
@@ -205,7 +206,6 @@ function setupMobileControls() {
 
     let lastLookX = 0;
     let lastLookY = 0;
-    let pitch = 0;
 
     document.addEventListener("touchstart", (e) => {
         for (let touch of e.changedTouches) {
@@ -232,14 +232,15 @@ function setupMobileControls() {
         for (let touch of e.changedTouches) {
 
             if (touch.identifier === joystickTouchId) {
+
                 const dx = touch.clientX - centerX;
                 const dy = touch.clientY - centerY;
 
-                const dist = Math.min(Math.sqrt(dx * dx + dy * dy), 40);
+                const dist = Math.min(Math.sqrt(dx*dx + dy*dy), 40);
                 const angle = Math.atan2(dy, dx);
 
                 stick.style.transform =
-                    `translate(${Math.cos(angle) * dist}px, ${Math.sin(angle) * dist}px)`;
+                    `translate(${Math.cos(angle)*dist}px, ${Math.sin(angle)*dist}px)`;
 
                 move.forward = dy < -10;
                 move.backward = dy > 10;
@@ -248,6 +249,7 @@ function setupMobileControls() {
             }
 
             if (touch.identifier === lookTouchId) {
+
                 const deltaX = touch.clientX - lastLookX;
                 const deltaY = touch.clientY - lastLookY;
 
