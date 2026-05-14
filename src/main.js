@@ -7,11 +7,12 @@ import { XRControllerModelFactory } from "https://unpkg.com/three@0.160.0/exampl
 
 let scene, camera, renderer, model, yawObject, pitchObject;
 let collisionMesh = null;
-let navMesh = null;
 let navMeshes = [];
 let rightController = null;
 let rightTeleportRay = null;
 let teleportMarker = null;
+let pendingTeleportHit = null;
+let teleportReleaseReady = false;
 
 const clock = new THREE.Clock();
 const move = { forward: false, backward: false, left: false, right: false };
@@ -21,7 +22,6 @@ let isMobile = false;
 let pitch = 0;
 let playerBaseY = 0;
 let rightTurnReady = true;
-let rightTeleportReady = true;
 
 const playerHeight = 1.7;
 const playerRadius = 0.35;
@@ -133,7 +133,6 @@ async function loadSceneModel() {
             (gltf) => {
                 model = gltf.scene;
                 collisionMesh = null;
-                navMesh = null;
                 navMeshes = [];
                 processModel(model);
                 scene.add(model);
@@ -203,7 +202,6 @@ function processModel(root) {
         }
 
         if (meshName.includes("navmesh")) {
-            if (!navMesh) navMesh = child;
             navMeshes.push(child);
             child.visible = false;
             child.userData.ignoreCollision = true;
@@ -371,7 +369,8 @@ function setupInputControls() {
     renderer.xr.addEventListener("sessionstart", () => {
         canMove = true;
         rightTurnReady = true;
-        rightTeleportReady = true;
+        teleportReleaseReady = false;
+        pendingTeleportHit = null;
         hideTeleportVisuals();
         if (ui.startScreen) ui.startScreen.style.display = "none";
         document.exitPointerLock?.();
@@ -552,13 +551,10 @@ function getNavmeshHitFromRightController() {
     const controllerRay = getRightControllerRay();
     if (!controllerRay) return null;
 
-    for (const mesh of navMeshes) {
-        mesh.updateMatrixWorld(true);
-    }
+    for (const mesh of navMeshes) mesh.updateMatrixWorld(true);
 
     const raycaster = new THREE.Raycaster(controllerRay.origin, controllerRay.direction, 0, teleportRayDistance);
     const hits = raycaster.intersectObjects(navMeshes, true);
-
     return hits.length > 0 ? hits[0] : null;
 }
 
@@ -576,41 +572,51 @@ function updateTeleportMarker(hit) {
     teleportMarker.rotation.set(-Math.PI / 2, 0, 0);
 }
 
-function updateTeleportRay(stickY) {
+function updateTeleportAim(stickY) {
     hideTeleportVisuals();
-    if (!rightTeleportRay || !renderer.xr.isPresenting) return;
-    if (Math.abs(stickY) < rightTeleportResetThreshold) return;
+
+    if (!rightTeleportRay || !renderer.xr.isPresenting) {
+        pendingTeleportHit = null;
+        return;
+    }
+
+    if (Math.abs(stickY) < rightTeleportResetThreshold) {
+        pendingTeleportHit = null;
+        return;
+    }
 
     rightTeleportRay.visible = true;
+
     const hit = getNavmeshHitFromRightController();
+    pendingTeleportHit = hit;
     rightTeleportRay.scale.z = hit ? hit.distance : teleportRayDistance;
     updateTeleportMarker(hit);
+
+    if (Math.abs(stickY) >= rightTeleportThreshold && hit) {
+        teleportReleaseReady = true;
+    }
 }
 
 function teleportToNavmeshHit(hit) {
-    const xrCamera = renderer.xr.getCamera(camera);
-    const headPosition = new THREE.Vector3();
-    xrCamera.getWorldPosition(headPosition);
-
-    const headOffsetX = headPosition.x - yawObject.position.x;
-    const headOffsetZ = headPosition.z - yawObject.position.z;
-
     playerBaseY = hit.point.y;
-    yawObject.position.set(hit.point.x - headOffsetX, playerBaseY, hit.point.z - headOffsetZ);
+    yawObject.position.set(hit.point.x, playerBaseY, hit.point.z);
 }
 
 function handleRightStickTeleport(stickY) {
-    updateTeleportRay(stickY);
+    const isNeutral = Math.abs(stickY) < rightTeleportResetThreshold;
 
-    if (Math.abs(stickY) < rightTeleportResetThreshold) {
-        rightTeleportReady = true;
+    if (!isNeutral) {
+        updateTeleportAim(stickY);
         return;
     }
-    if (!rightTeleportReady || Math.abs(stickY) < rightTeleportThreshold) return;
-    rightTeleportReady = false;
 
-    const hit = getNavmeshHitFromRightController();
-    if (hit) teleportToNavmeshHit(hit);
+    if (teleportReleaseReady && pendingTeleportHit) {
+        teleportToNavmeshHit(pendingTeleportHit);
+    }
+
+    teleportReleaseReady = false;
+    pendingTeleportHit = null;
+    hideTeleportVisuals();
 }
 
 function handleVRRightStickActions() {
