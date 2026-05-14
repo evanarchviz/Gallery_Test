@@ -30,8 +30,8 @@ const stepHeight = 0.2;
 const rightTurnAngle = THREE.MathUtils.degToRad(30);
 const rightTurnThreshold = 0.75;
 const rightTurnResetThreshold = 0.25;
-const rightTeleportThreshold = -0.75;
-const rightTeleportResetThreshold = -0.25;
+const rightTeleportThreshold = 0.75;
+const rightTeleportResetThreshold = 0.25;
 const teleportRayDistance = 25;
 const teleportMarkerYOffset = 0.025;
 const SPAWN = new THREE.Vector3(0, 1.5, 0);
@@ -561,7 +561,7 @@ function updateTeleportMarker(hit) {
 function updateTeleportRay(stickY) {
     hideTeleportVisuals();
     if (!rightTeleportRay || !renderer.xr.isPresenting) return;
-    if (stickY > rightTeleportResetThreshold) return;
+    if (Math.abs(stickY) < rightTeleportResetThreshold) return;
 
     rightTeleportRay.visible = true;
     const hit = getNavmeshHitFromRightController();
@@ -584,11 +584,11 @@ function teleportToNavmeshHit(hit) {
 function handleRightStickTeleport(stickY) {
     updateTeleportRay(stickY);
 
-    if (stickY > rightTeleportResetThreshold) {
+    if (Math.abs(stickY) < rightTeleportResetThreshold) {
         rightTeleportReady = true;
         return;
     }
-    if (!rightTeleportReady || stickY > rightTeleportThreshold) return;
+    if (!rightTeleportReady || Math.abs(stickY) < rightTeleportThreshold) return;
     rightTeleportReady = false;
 
     const hit = getNavmeshHitFromRightController();
