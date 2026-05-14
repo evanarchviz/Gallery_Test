@@ -697,23 +697,52 @@ function handleVRRightStickActions() {
     handleRightStickTeleport(axes.y);
 }
 
-function getVRHeadMovementBasis() {
-    const xrCamera = renderer.xr.getCamera(camera);
-    xrCamera.updateMatrixWorld(true);
+function getXRViewerForward(frame) {
+    if (!frame) return null;
 
-    const headCamera = xrCamera.cameras?.[0] || xrCamera;
-    headCamera.updateMatrixWorld(true);
+    const referenceSpace = renderer.xr.getReferenceSpace();
+    if (!referenceSpace) return null;
 
-    const forward = new THREE.Vector3();
-    headCamera.getWorldDirection(forward);
+    const viewerPose = frame.getViewerPose(referenceSpace);
+    if (!viewerPose) return null;
+
+    const orientation = viewerPose.transform.orientation;
+    const hmdQuaternion = new THREE.Quaternion(
+        orientation.x,
+        orientation.y,
+        orientation.z,
+        orientation.w
+    );
+
+    const forward = new THREE.Vector3(0, 0, -1);
+    forward.applyQuaternion(hmdQuaternion);
+    forward.applyQuaternion(yawObject.quaternion);
     forward.y = 0;
 
-    if (forward.lengthSq() < 0.0001) {
-        forward.set(0, 0, -1).applyQuaternion(yawObject.quaternion);
-        forward.y = 0;
-    }
+    return forward.lengthSq() > 0.0001 ? forward.normalize() : null;
+}
 
-    forward.normalize();
+function getVRHeadMovementBasis(frame) {
+    let forward = getXRViewerForward(frame);
+
+    if (!forward) {
+        const xrCamera = renderer.xr.getCamera(camera);
+        xrCamera.updateMatrixWorld(true);
+
+        const headCamera = xrCamera.cameras?.[0] || xrCamera;
+        headCamera.updateMatrixWorld(true);
+
+        forward = new THREE.Vector3();
+        headCamera.getWorldDirection(forward);
+        forward.y = 0;
+
+        if (forward.lengthSq() < 0.0001) {
+            forward.set(0, 0, -1).applyQuaternion(yawObject.quaternion);
+            forward.y = 0;
+        }
+
+        forward.normalize();
+    }
 
     const right = new THREE.Vector3();
     right.crossVectors(forward, new THREE.Vector3(0, 1, 0)).normalize();
@@ -721,12 +750,12 @@ function getVRHeadMovementBasis() {
     return { forward, right };
 }
 
-function getVRMovementVector(delta) {
+function getVRMovementVector(delta, frame) {
     const session = renderer.xr.getSession();
     if (!session) return new THREE.Vector3();
 
     const movement = new THREE.Vector3();
-    const { forward, right } = getVRHeadMovementBasis();
+    const { forward, right } = getVRHeadMovementBasis(frame);
 
     for (const source of session.inputSources) {
         if (source.handedness === "right") continue;
@@ -789,7 +818,7 @@ function applyMovement(movement) {
         : playerBaseY + playerHeight;
 }
 
-function animate() {
+function animate(time, frame) {
     const delta = clock.getDelta();
 
     updateControllerModelMaterials();
@@ -799,7 +828,7 @@ function animate() {
         else hideTeleportVisuals();
 
         const movement = renderer.xr.isPresenting
-            ? getVRMovementVector(delta)
+            ? getVRMovementVector(delta, frame)
             : getDesktopMovementVector(delta);
 
         applyMovement(movement);
