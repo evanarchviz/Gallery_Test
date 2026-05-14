@@ -7,6 +7,7 @@ import { VRButton } from "https://unpkg.com/three@0.160.0/examples/jsm/webxr/VRB
 let scene, camera, renderer;
 let model;
 let collisionMesh = null;
+let navMesh = null;
 let clock = new THREE.Clock();
 
 let move = {
@@ -23,6 +24,7 @@ let pitchObject;
 let pitch = 0;
 let playerBaseY = 0;
 let rightTurnReady = true;
+let rightTeleportReady = true;
 
 const playerHeight = 1.7;
 const playerRadius = 0.35;
@@ -32,6 +34,9 @@ const stepHeight = 0.2;
 const rightTurnAngle = THREE.MathUtils.degToRad(30);
 const rightTurnThreshold = 0.75;
 const rightTurnResetThreshold = 0.25;
+const rightTeleportThreshold = -0.75;
+const rightTeleportResetThreshold = -0.25;
+const teleportRayDistance = 25;
 
 const SPAWN = new THREE.Vector3(0, 1.5, 0);
 
@@ -153,6 +158,7 @@ async function loadSceneModel() {
             (gltf) => {
                 model = gltf.scene;
                 collisionMesh = null;
+                navMesh = null;
                 processModel(model);
                 scene.add(model);
 
@@ -187,11 +193,21 @@ function processModel(root) {
     root.traverse((child) => {
         if (!child.isMesh) return;
 
-        if (child.name.toLowerCase() === "collision") {
+        const meshName = child.name.toLowerCase();
+
+        if (meshName === "collision") {
             collisionMesh = child;
             child.visible = false;
             child.userData.ignoreCollision = false;
             console.info("Using GLB mesh named 'collision' as the sole continuous-movement collision target.");
+            return;
+        }
+
+        if (meshName === "navmesh") {
+            navMesh = child;
+            child.visible = false;
+            child.userData.ignoreCollision = true;
+            console.info("Using GLB mesh named 'navmesh' as the VR teleport target.");
             return;
         }
 
@@ -210,6 +226,10 @@ function processModel(root) {
 
     if (!collisionMesh) {
         console.info("No GLB mesh named 'collision' found. Falling back to full-scene continuous-movement collision.");
+    }
+
+    if (!navMesh) {
+        console.info("No GLB mesh named 'navmesh' found. VR teleport will stay disabled.");
     }
 
     function replaceMaterial(mat) {
@@ -345,6 +365,7 @@ function setupInputControls() {
     renderer.xr.addEventListener("sessionstart", () => {
         canMove = true;
         rightTurnReady = true;
+        rightTeleportReady = true;
         if (ui.startScreen) ui.startScreen.style.display = "none";
 
         document.exitPointerLock?.();
@@ -482,20 +503,29 @@ function getDesktopMovementVector(delta) {
     return movement;
 }
 
-function getRightStickX() {
+function getRightInputSource() {
     const session = renderer.xr.getSession();
-    if (!session) return 0;
+    if (!session) return null;
 
     for (const source of session.inputSources) {
-        if (source.handedness !== "right") continue;
-
-        const gamepad = source.gamepad;
-        if (!gamepad || !gamepad.axes || gamepad.axes.length < 2) continue;
-
-        return gamepad.axes.length >= 4 ? gamepad.axes[2] : gamepad.axes[0];
+        if (source.handedness === "right") return source;
     }
 
-    return 0;
+    return null;
+}
+
+function getRightStickAxes() {
+    const source = getRightInputSource();
+    if (!source) return { x: 0, y: 0 };
+
+    const gamepad = source.gamepad;
+    if (!gamepad || !gamepad.axes || gamepad.axes.length < 2) return { x: 0, y: 0 };
+
+    if (gamepad.axes.length >= 4) {
+        return { x: gamepad.axes[2], y: gamepad.axes[3] };
+    }
+
+    return { x: gamepad.axes[0], y: gamepad.axes[1] };
 }
 
 function rotateRigAroundHead(angle) {
@@ -510,9 +540,7 @@ function rotateRigAroundHead(angle) {
     yawObject.position.add(headBefore.sub(headAfter));
 }
 
-function handleRightStickTurn() {
-    const turnX = getRightStickX();
-
+function handleRightStickTurn(turnX) {
     if (Math.abs(turnX) < rightTurnResetThreshold) {
         rightTurnReady = true;
         return;
@@ -522,6 +550,60 @@ function handleRightStickTurn() {
 
     rotateRigAroundHead(turnX > 0 ? -rightTurnAngle : rightTurnAngle);
     rightTurnReady = false;
+}
+
+function teleportToNavmeshHit(hit) {
+    const xrCamera = renderer.xr.getCamera(camera);
+    const headPosition = new THREE.Vector3();
+    xrCamera.getWorldPosition(headPosition);
+
+    const headOffsetX = headPosition.x - yawObject.position.x;
+    const headOffsetZ = headPosition.z - yawObject.position.z;
+
+    playerBaseY = hit.point.y;
+    yawObject.position.set(
+        hit.point.x - headOffsetX,
+        playerBaseY,
+        hit.point.z - headOffsetZ
+    );
+}
+
+function handleRightStickTeleport(frame, stickY) {
+    if (stickY > rightTeleportResetThreshold) {
+        rightTeleportReady = true;
+        return;
+    }
+
+    if (!rightTeleportReady || stickY > rightTeleportThreshold) return;
+    rightTeleportReady = false;
+
+    if (!frame || !navMesh) return;
+
+    const source = getRightInputSource();
+    const referenceSpace = renderer.xr.getReferenceSpace();
+    if (!source || !source.targetRaySpace || !referenceSpace) return;
+
+    const pose = frame.getPose(source.targetRaySpace, referenceSpace);
+    if (!pose) return;
+
+    const matrix = new THREE.Matrix4().fromArray(pose.transform.matrix);
+    const origin = new THREE.Vector3().setFromMatrixPosition(matrix);
+    const direction = new THREE.Vector3(0, 0, -1).transformDirection(matrix).normalize();
+
+    const raycaster = new THREE.Raycaster(origin, direction, 0, teleportRayDistance);
+    const hits = raycaster
+        .intersectObject(navMesh, true)
+        .filter((hit) => !hit.object.userData.ignoreCollision);
+
+    if (hits.length === 0) return;
+
+    teleportToNavmeshHit(hits[0]);
+}
+
+function handleVRRightStickActions(frame) {
+    const axes = getRightStickAxes();
+    handleRightStickTurn(axes.x);
+    handleRightStickTeleport(frame, axes.y);
 }
 
 function getVRMovementVector(delta) {
@@ -617,12 +699,12 @@ function applyMovement(movement) {
         : playerBaseY + playerHeight;
 }
 
-function animate() {
+function animate(time, frame) {
     const delta = clock.getDelta();
 
     if (canMove && model) {
         if (renderer.xr.isPresenting) {
-            handleRightStickTurn();
+            handleVRRightStickActions(frame);
         }
 
         const movement = renderer.xr.isPresenting
