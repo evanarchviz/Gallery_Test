@@ -16,6 +16,7 @@ let teleportReleaseReady = false;
 
 const clock = new THREE.Clock();
 const move = { forward: false, backward: false, left: false, right: false };
+const controllerModels = [];
 
 let canMove = false;
 let isMobile = false;
@@ -254,6 +255,40 @@ function createTeleportMarker() {
     return marker;
 }
 
+function toUnlitControllerMaterial(material) {
+    if (!material) return material;
+    if (material.userData?.isUnlitControllerMaterial) return material;
+
+    const hasTexture = Boolean(material.map);
+    const unlit = new THREE.MeshBasicMaterial({
+        name: material.name || "controller-unlit",
+        map: material.map || null,
+        alphaMap: material.alphaMap || null,
+        color: hasTexture ? 0xffffff : (material.color ? material.color.clone() : 0xffffff),
+        transparent: material.transparent || material.opacity < 1 || Boolean(material.alphaMap),
+        opacity: material.opacity ?? 1,
+        side: material.side ?? THREE.FrontSide,
+        depthTest: material.depthTest ?? true,
+        depthWrite: material.depthWrite ?? true,
+        toneMapped: false
+    });
+
+    unlit.userData.isUnlitControllerMaterial = true;
+    return unlit;
+}
+
+function updateControllerModelMaterials() {
+    for (const controllerModel of controllerModels) {
+        controllerModel.traverse((child) => {
+            if (!child.isMesh || !child.material) return;
+
+            child.material = Array.isArray(child.material)
+                ? child.material.map(toUnlitControllerMaterial)
+                : toUnlitControllerMaterial(child.material);
+        });
+    }
+}
+
 function addVRControllers() {
     const controllerModelFactory = new XRControllerModelFactory();
 
@@ -278,7 +313,10 @@ function addVRControllers() {
             if (rightController === controller) rightController = null;
         });
 
-        grip.add(controllerModelFactory.createControllerModel(grip));
+        const controllerModel = controllerModelFactory.createControllerModel(grip);
+        controllerModels.push(controllerModel);
+        grip.add(controllerModel);
+
         yawObject.add(controller);
         yawObject.add(grip);
     }
@@ -702,6 +740,8 @@ function applyMovement(movement) {
 
 function animate() {
     const delta = clock.getDelta();
+
+    updateControllerModelMaterials();
 
     if (canMove && model) {
         if (renderer.xr.isPresenting) handleVRRightStickActions();
