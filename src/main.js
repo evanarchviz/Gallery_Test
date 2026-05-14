@@ -21,12 +21,16 @@ let yawObject;
 let pitchObject;
 let pitch = 0;
 let playerBaseY = 0;
+let rightTurnReady = true;
 
 const playerHeight = 1.7;
 const playerRadius = 0.35;
 const speed = 2;
 const vrSpeed = 2;
 const stepHeight = 0.2;
+const rightTurnAngle = THREE.MathUtils.degToRad(30);
+const rightTurnThreshold = 0.75;
+const rightTurnResetThreshold = 0.25;
 
 const SPAWN = new THREE.Vector3(0, 1.5, 0);
 
@@ -323,6 +327,7 @@ function setupInputControls() {
 
     renderer.xr.addEventListener("sessionstart", () => {
         canMove = true;
+        rightTurnReady = true;
         if (ui.startScreen) ui.startScreen.style.display = "none";
 
         document.exitPointerLock?.();
@@ -460,6 +465,48 @@ function getDesktopMovementVector(delta) {
     return movement;
 }
 
+function getRightStickX() {
+    const session = renderer.xr.getSession();
+    if (!session) return 0;
+
+    for (const source of session.inputSources) {
+        if (source.handedness !== "right") continue;
+
+        const gamepad = source.gamepad;
+        if (!gamepad || !gamepad.axes || gamepad.axes.length < 2) continue;
+
+        return gamepad.axes.length >= 4 ? gamepad.axes[2] : gamepad.axes[0];
+    }
+
+    return 0;
+}
+
+function rotateRigAroundHead(angle) {
+    const xrCamera = renderer.xr.getCamera(camera);
+    const headBefore = new THREE.Vector3();
+    const headAfter = new THREE.Vector3();
+
+    xrCamera.getWorldPosition(headBefore);
+    yawObject.rotation.y += angle;
+    yawObject.updateMatrixWorld(true);
+    xrCamera.getWorldPosition(headAfter);
+    yawObject.position.add(headBefore.sub(headAfter));
+}
+
+function handleRightStickTurn() {
+    const turnX = getRightStickX();
+
+    if (Math.abs(turnX) < rightTurnResetThreshold) {
+        rightTurnReady = true;
+        return;
+    }
+
+    if (!rightTurnReady || Math.abs(turnX) < rightTurnThreshold) return;
+
+    rotateRigAroundHead(turnX > 0 ? -rightTurnAngle : rightTurnAngle);
+    rightTurnReady = false;
+}
+
 function getVRMovementVector(delta) {
     const session = renderer.xr.getSession();
     if (!session) return new THREE.Vector3();
@@ -556,6 +603,10 @@ function animate() {
     const delta = clock.getDelta();
 
     if (canMove && model) {
+        if (renderer.xr.isPresenting) {
+            handleRightStickTurn();
+        }
+
         const movement = renderer.xr.isPresenting
             ? getVRMovementVector(delta)
             : getDesktopMovementVector(delta);
