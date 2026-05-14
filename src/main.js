@@ -156,6 +156,16 @@ function getCollisionTarget() {
     return collisionMesh || model;
 }
 
+function makeMeshDoubleSided(mesh) {
+    const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+
+    for (const material of materials) {
+        if (!material) continue;
+        material.side = THREE.DoubleSide;
+        material.needsUpdate = true;
+    }
+}
+
 function processModel(root) {
     const glassNames = ["M_Glass_Darker", "glass", "win_glass"];
 
@@ -183,7 +193,7 @@ function processModel(root) {
         if (!child.isMesh) return;
         const meshName = child.name.toLowerCase();
 
-        if (meshName === "collision") {
+        if (meshName === "collision" || meshName.startsWith("collision.")) {
             collisionMesh = child;
             child.visible = false;
             child.userData.ignoreCollision = false;
@@ -191,10 +201,11 @@ function processModel(root) {
             return;
         }
 
-        if (meshName === "navmesh") {
+        if (meshName === "navmesh" || meshName.startsWith("navmesh.")) {
             navMesh = child;
             child.visible = false;
             child.userData.ignoreCollision = true;
+            makeMeshDoubleSided(child);
             console.info("Using GLB mesh named 'navmesh' as the VR teleport target.");
             return;
         }
