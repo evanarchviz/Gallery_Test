@@ -467,6 +467,8 @@ function getVRMovementVector(delta) {
     const movement = new THREE.Vector3();
 
     for (const source of session.inputSources) {
+        if (source.handedness === "right") continue;
+
         const gamepad = source.gamepad;
         if (!gamepad || !gamepad.axes || gamepad.axes.length < 2) continue;
 
