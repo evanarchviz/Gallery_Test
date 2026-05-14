@@ -701,8 +701,11 @@ function getVRHeadMovementBasis() {
     const xrCamera = renderer.xr.getCamera(camera);
     xrCamera.updateMatrixWorld(true);
 
+    const headCamera = xrCamera.cameras?.[0] || xrCamera;
+    headCamera.updateMatrixWorld(true);
+
     const forward = new THREE.Vector3();
-    xrCamera.getWorldDirection(forward);
+    headCamera.getWorldDirection(forward);
     forward.y = 0;
 
     if (forward.lengthSq() < 0.0001) {
