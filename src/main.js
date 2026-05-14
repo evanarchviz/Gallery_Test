@@ -539,9 +539,7 @@ function getNavmeshHitFromRightController() {
     if (!controllerRay) return null;
 
     const raycaster = new THREE.Raycaster(controllerRay.origin, controllerRay.direction, 0, teleportRayDistance);
-    const hits = raycaster
-        .intersectObject(navMesh, true)
-        .filter((hit) => !hit.object.userData.ignoreCollision);
+    const hits = raycaster.intersectObject(navMesh, true);
 
     return hits.length > 0 ? hits[0] : null;
 }
