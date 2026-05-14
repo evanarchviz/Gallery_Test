@@ -697,11 +697,33 @@ function handleVRRightStickActions() {
     handleRightStickTeleport(axes.y);
 }
 
+function getVRHeadMovementBasis() {
+    const xrCamera = renderer.xr.getCamera(camera);
+    xrCamera.updateMatrixWorld(true);
+
+    const forward = new THREE.Vector3();
+    xrCamera.getWorldDirection(forward);
+    forward.y = 0;
+
+    if (forward.lengthSq() < 0.0001) {
+        forward.set(0, 0, -1).applyQuaternion(yawObject.quaternion);
+        forward.y = 0;
+    }
+
+    forward.normalize();
+
+    const right = new THREE.Vector3();
+    right.crossVectors(forward, new THREE.Vector3(0, 1, 0)).normalize();
+
+    return { forward, right };
+}
+
 function getVRMovementVector(delta) {
     const session = renderer.xr.getSession();
     if (!session) return new THREE.Vector3();
 
     const movement = new THREE.Vector3();
+    const { forward, right } = getVRHeadMovementBasis();
 
     for (const source of session.inputSources) {
         if (source.handedness === "right") continue;
@@ -715,14 +737,6 @@ function getVRMovementVector(delta) {
         if (Math.abs(x) < deadzone) x = 0;
         if (Math.abs(y) < deadzone) y = 0;
         if (x === 0 && y === 0) continue;
-
-        const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(yawObject.quaternion);
-        forward.y = 0;
-        forward.normalize();
-
-        const right = new THREE.Vector3(1, 0, 0).applyQuaternion(yawObject.quaternion);
-        right.y = 0;
-        right.normalize();
 
         movement.addScaledVector(forward, -y);
         movement.addScaledVector(right, x);
