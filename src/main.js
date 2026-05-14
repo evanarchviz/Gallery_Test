@@ -168,7 +168,10 @@ async function loadSceneModel() {
         );
     });
 }
-
+function addVRButton() {
+    if (document.getElementById("VRButton")) return;
+    document.body.appendChild(VRButton.createButton(renderer));
+}
 function processModel(root) {
     const glassNames = ["M_Glass_Darker", "glass", "win_glass"];
 
@@ -242,7 +245,6 @@ async function init() {
     renderer.xr.enabled = true;
 
     container.appendChild(renderer.domElement);
-    document.body.appendChild(VRButton.createButton(renderer));
 
     window.addEventListener("resize", () => {
         camera.aspect = window.innerWidth / window.innerHeight;
@@ -268,10 +270,11 @@ async function init() {
 
     renderer.setAnimationLoop(animate);
 
-    setTimeout(() => {
-        hideLoadingScreen();
-        setStartScreenEnabled(true);
-    }, 250);
+setTimeout(() => {
+    hideLoadingScreen();
+    setStartScreenEnabled(true);
+    addVRButton();
+}, 250);
 }
 
 function setupInputControls() {
