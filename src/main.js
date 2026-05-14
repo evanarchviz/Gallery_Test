@@ -3,6 +3,7 @@ import { GLTFLoader } from "https://unpkg.com/three@0.160.0/examples/jsm/loaders
 import { MeshoptDecoder } from "https://unpkg.com/three@0.160.0/examples/jsm/libs/meshopt_decoder.module.js";
 import { RGBELoader } from "https://unpkg.com/three@0.160.0/examples/jsm/loaders/RGBELoader.js";
 import { VRButton } from "https://unpkg.com/three@0.160.0/examples/jsm/webxr/VRButton.js";
+import { XRControllerModelFactory } from "https://unpkg.com/three@0.160.0/examples/jsm/webxr/XRControllerModelFactory.js";
 
 let scene, camera, renderer;
 let model;
@@ -258,6 +259,28 @@ function processModel(root) {
     }
 }
 
+function addVRControllers() {
+    const controllerModelFactory = new XRControllerModelFactory();
+
+    for (let i = 0; i < 2; i++) {
+        const controller = renderer.xr.getController(i);
+        const rayGeometry = new THREE.BufferGeometry().setFromPoints([
+            new THREE.Vector3(0, 0, 0),
+            new THREE.Vector3(0, 0, -1)
+        ]);
+        const rayMaterial = new THREE.LineBasicMaterial({ transparent: true, opacity: 0.65 });
+        const ray = new THREE.Line(rayGeometry, rayMaterial);
+        ray.name = "controller-ray";
+        ray.scale.z = 5;
+        controller.add(ray);
+        scene.add(controller);
+
+        const grip = renderer.xr.getControllerGrip(i);
+        grip.add(controllerModelFactory.createControllerModel(grip));
+        scene.add(grip);
+    }
+}
+
 async function init() {
     isMobile = detectMobile();
 
@@ -299,6 +322,7 @@ async function init() {
     yawObject.add(pitchObject);
     pitchObject.add(camera);
     scene.add(yawObject);
+    addVRControllers();
 
     playerBaseY = SPAWN.y - playerHeight;
 
