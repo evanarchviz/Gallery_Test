@@ -9,6 +9,7 @@ let scene, camera, renderer;
 let model;
 let collisionMesh = null;
 let navMesh = null;
+let rightTeleportRay = null;
 let clock = new THREE.Clock();
 
 let move = {
@@ -259,20 +260,40 @@ function processModel(root) {
     }
 }
 
+function createTeleportRay() {
+    const rayGeometry = new THREE.BufferGeometry().setFromPoints([
+        new THREE.Vector3(0, 0, 0),
+        new THREE.Vector3(0, 0, -1)
+    ]);
+    const rayMaterial = new THREE.LineBasicMaterial({ transparent: true, opacity: 0.85 });
+    const ray = new THREE.Line(rayGeometry, rayMaterial);
+    ray.name = "right-teleport-ray";
+    ray.visible = false;
+    ray.scale.z = teleportRayDistance;
+    return ray;
+}
+
 function addVRControllers() {
     const controllerModelFactory = new XRControllerModelFactory();
 
     for (let i = 0; i < 2; i++) {
         const controller = renderer.xr.getController(i);
-        const rayGeometry = new THREE.BufferGeometry().setFromPoints([
-            new THREE.Vector3(0, 0, 0),
-            new THREE.Vector3(0, 0, -1)
-        ]);
-        const rayMaterial = new THREE.LineBasicMaterial({ transparent: true, opacity: 0.65 });
-        const ray = new THREE.Line(rayGeometry, rayMaterial);
-        ray.name = "controller-ray";
-        ray.scale.z = 5;
-        controller.add(ray);
+
+        controller.addEventListener("connected", (event) => {
+            if (event.data?.handedness !== "right") return;
+            if (rightTeleportRay) return;
+
+            rightTeleportRay = createTeleportRay();
+            controller.add(rightTeleportRay);
+        });
+
+        controller.addEventListener("disconnected", () => {
+            if (rightTeleportRay && rightTeleportRay.parent === controller) {
+                controller.remove(rightTeleportRay);
+                rightTeleportRay = null;
+            }
+        });
+
         scene.add(controller);
 
         const grip = renderer.xr.getControllerGrip(i);
@@ -390,6 +411,7 @@ function setupInputControls() {
         canMove = true;
         rightTurnReady = true;
         rightTeleportReady = true;
+        if (rightTeleportRay) rightTeleportRay.visible = false;
         if (ui.startScreen) ui.startScreen.style.display = "none";
 
         document.exitPointerLock?.();
@@ -576,6 +598,57 @@ function handleRightStickTurn(turnX) {
     rightTurnReady = false;
 }
 
+function getRightControllerRay(frame) {
+    if (!frame) return null;
+
+    const source = getRightInputSource();
+    const referenceSpace = renderer.xr.getReferenceSpace();
+    if (!source || !source.targetRaySpace || !referenceSpace) return null;
+
+    const pose = frame.getPose(source.targetRaySpace, referenceSpace);
+    if (!pose) return null;
+
+    const matrix = new THREE.Matrix4().fromArray(pose.transform.matrix);
+    const origin = new THREE.Vector3().setFromMatrixPosition(matrix);
+    const direction = new THREE.Vector3(0, 0, -1).transformDirection(matrix).normalize();
+
+    return { origin, direction };
+}
+
+function getNavmeshHitFromRightController(frame) {
+    if (!navMesh) return null;
+
+    const controllerRay = getRightControllerRay(frame);
+    if (!controllerRay) return null;
+
+    const raycaster = new THREE.Raycaster(
+        controllerRay.origin,
+        controllerRay.direction,
+        0,
+        teleportRayDistance
+    );
+
+    const hits = raycaster
+        .intersectObject(navMesh, true)
+        .filter((hit) => !hit.object.userData.ignoreCollision);
+
+    return hits.length > 0 ? hits[0] : null;
+}
+
+function updateTeleportRay(frame, stickY) {
+    if (!rightTeleportRay) return;
+
+    rightTeleportRay.visible = false;
+
+    if (!renderer.xr.isPresenting) return;
+    if (stickY > rightTeleportResetThreshold) return;
+
+    rightTeleportRay.visible = true;
+
+    const hit = getNavmeshHitFromRightController(frame);
+    rightTeleportRay.scale.z = hit ? hit.distance : teleportRayDistance;
+}
+
 function teleportToNavmeshHit(hit) {
     const xrCamera = renderer.xr.getCamera(camera);
     const headPosition = new THREE.Vector3();
@@ -593,6 +666,8 @@ function teleportToNavmeshHit(hit) {
 }
 
 function handleRightStickTeleport(frame, stickY) {
+    updateTeleportRay(frame, stickY);
+
     if (stickY > rightTeleportResetThreshold) {
         rightTeleportReady = true;
         return;
@@ -601,27 +676,10 @@ function handleRightStickTeleport(frame, stickY) {
     if (!rightTeleportReady || stickY > rightTeleportThreshold) return;
     rightTeleportReady = false;
 
-    if (!frame || !navMesh) return;
+    const hit = getNavmeshHitFromRightController(frame);
+    if (!hit) return;
 
-    const source = getRightInputSource();
-    const referenceSpace = renderer.xr.getReferenceSpace();
-    if (!source || !source.targetRaySpace || !referenceSpace) return;
-
-    const pose = frame.getPose(source.targetRaySpace, referenceSpace);
-    if (!pose) return;
-
-    const matrix = new THREE.Matrix4().fromArray(pose.transform.matrix);
-    const origin = new THREE.Vector3().setFromMatrixPosition(matrix);
-    const direction = new THREE.Vector3(0, 0, -1).transformDirection(matrix).normalize();
-
-    const raycaster = new THREE.Raycaster(origin, direction, 0, teleportRayDistance);
-    const hits = raycaster
-        .intersectObject(navMesh, true)
-        .filter((hit) => !hit.object.userData.ignoreCollision);
-
-    if (hits.length === 0) return;
-
-    teleportToNavmeshHit(hits[0]);
+    teleportToNavmeshHit(hit);
 }
 
 function handleVRRightStickActions(frame) {
@@ -730,6 +788,8 @@ function animate(time, frame) {
     if (canMove && model) {
         if (renderer.xr.isPresenting) {
             handleVRRightStickActions(frame);
+        } else if (rightTeleportRay) {
+            rightTeleportRay.visible = false;
         }
 
         const movement = renderer.xr.isPresenting
