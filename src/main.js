@@ -255,25 +255,57 @@ function createTeleportMarker() {
     return marker;
 }
 
-function toUnlitControllerMaterial(material) {
-    if (!material) return material;
-    if (material.userData?.isUnlitControllerMaterial) return material;
+function getControllerMaterialSource(child, material, index = 0) {
+    if (!child.userData.controllerOriginalMaterials) child.userData.controllerOriginalMaterials = [];
+    if (!child.userData.controllerOriginalMaterials[index]) {
+        child.userData.controllerOriginalMaterials[index] = material;
+    }
+    return child.userData.controllerOriginalMaterials[index];
+}
 
-    const hasTexture = Boolean(material.map);
-    const unlit = new THREE.MeshBasicMaterial({
-        name: material.name || "controller-unlit",
-        map: material.map || null,
-        alphaMap: material.alphaMap || null,
-        color: hasTexture ? 0xffffff : (material.color ? material.color.clone() : 0xffffff),
-        transparent: material.transparent || material.opacity < 1 || Boolean(material.alphaMap),
-        opacity: material.opacity ?? 1,
-        side: material.side ?? THREE.FrontSide,
-        depthTest: material.depthTest ?? true,
-        depthWrite: material.depthWrite ?? true,
-        toneMapped: false
-    });
+function getControllerUnlitMaterial(child, material, index = 0) {
+    if (!child.userData.controllerUnlitMaterials) child.userData.controllerUnlitMaterials = [];
 
-    unlit.userData.isUnlitControllerMaterial = true;
+    const source = getControllerMaterialSource(child, material, index);
+    const hasVertexColors = Boolean(child.geometry?.attributes?.color);
+    const map = source?.map || material?.map || null;
+    const alphaMap = source?.alphaMap || material?.alphaMap || null;
+
+    if (map) {
+        map.colorSpace = THREE.SRGBColorSpace;
+        map.needsUpdate = true;
+    }
+
+    let unlit = child.userData.controllerUnlitMaterials[index];
+    if (!unlit) {
+        unlit = new THREE.MeshBasicMaterial({
+            name: source?.name || material?.name || "controller-unlit",
+            toneMapped: false
+        });
+        child.userData.controllerUnlitMaterials[index] = unlit;
+    }
+
+    unlit.map = map;
+    unlit.alphaMap = alphaMap;
+    unlit.vertexColors = hasVertexColors;
+    unlit.transparent = Boolean(source?.transparent || material?.transparent || alphaMap || (source?.opacity ?? material?.opacity ?? 1) < 1);
+    unlit.opacity = source?.opacity ?? material?.opacity ?? 1;
+    unlit.side = source?.side ?? material?.side ?? THREE.FrontSide;
+    unlit.depthTest = source?.depthTest ?? material?.depthTest ?? true;
+    unlit.depthWrite = source?.depthWrite ?? material?.depthWrite ?? true;
+    unlit.toneMapped = false;
+
+    if (map || hasVertexColors) {
+        unlit.color.set(0xffffff);
+    } else if (source?.color) {
+        unlit.color.copy(source.color);
+    } else if (material?.color) {
+        unlit.color.copy(material.color);
+    } else {
+        unlit.color.set(0xffffff);
+    }
+
+    unlit.needsUpdate = true;
     return unlit;
 }
 
@@ -282,9 +314,11 @@ function updateControllerModelMaterials() {
         controllerModel.traverse((child) => {
             if (!child.isMesh || !child.material) return;
 
-            child.material = Array.isArray(child.material)
-                ? child.material.map(toUnlitControllerMaterial)
-                : toUnlitControllerMaterial(child.material);
+            if (Array.isArray(child.material)) {
+                child.material = child.material.map((material, index) => getControllerUnlitMaterial(child, material, index));
+            } else {
+                child.material = getControllerUnlitMaterial(child, child.material, 0);
+            }
         });
     }
 }
