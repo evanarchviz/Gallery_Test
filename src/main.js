@@ -5,25 +5,18 @@ import { RGBELoader } from "https://unpkg.com/three@0.160.0/examples/jsm/loaders
 import { VRButton } from "https://unpkg.com/three@0.160.0/examples/jsm/webxr/VRButton.js";
 import { XRControllerModelFactory } from "https://unpkg.com/three@0.160.0/examples/jsm/webxr/XRControllerModelFactory.js";
 
-let scene, camera, renderer;
-let model;
+let scene, camera, renderer, model, yawObject, pitchObject;
 let collisionMesh = null;
 let navMesh = null;
+let rightController = null;
 let rightTeleportRay = null;
 let teleportMarker = null;
-let clock = new THREE.Clock();
 
-let move = {
-    forward: false,
-    backward: false,
-    left: false,
-    right: false
-};
+const clock = new THREE.Clock();
+const move = { forward: false, backward: false, left: false, right: false };
 
 let canMove = false;
 let isMobile = false;
-let yawObject;
-let pitchObject;
 let pitch = 0;
 let playerBaseY = 0;
 let rightTurnReady = true;
@@ -41,7 +34,6 @@ const rightTeleportThreshold = -0.75;
 const rightTeleportResetThreshold = -0.25;
 const teleportRayDistance = 25;
 const teleportMarkerYOffset = 0.025;
-
 const SPAWN = new THREE.Vector3(0, 1.5, 0);
 
 const ui = {
@@ -59,52 +51,39 @@ setLoadingProgress(0, "Starting renderer...");
 init().catch((error) => showFatalError("Experience failed to start.", error));
 
 function detectMobile() {
-    const uaMobile = /Android|iPhone|iPad|iPod|Opera Mini|IEMobile/i.test(navigator.userAgent);
-    const coarsePointer = window.matchMedia("(pointer: coarse)").matches;
-    const smallScreen = window.innerWidth < 900;
-
-    return uaMobile || (coarsePointer && smallScreen);
+    return /Android|iPhone|iPad|iPod|Opera Mini|IEMobile/i.test(navigator.userAgent) ||
+        (window.matchMedia("(pointer: coarse)").matches && window.innerWidth < 900);
 }
 
 function setStartScreenEnabled(enabled) {
     if (!ui.startScreen) return;
-
     ui.startScreen.classList.toggle("is-hidden", !enabled);
     ui.startScreen.style.pointerEvents = enabled ? "auto" : "none";
 }
 
 function setLoadingProgress(value, status = "Loading...") {
     const percent = Math.max(0, Math.min(100, Math.round(value)));
-
-    if (ui.loadingScreen) ui.loadingScreen.classList.remove("is-hidden");
+    ui.loadingScreen?.classList.remove("is-hidden");
     if (ui.loadingStatus) ui.loadingStatus.textContent = status;
     if (ui.loadingProgress) ui.loadingProgress.style.width = `${percent}%`;
     if (ui.loadingPercent) ui.loadingPercent.textContent = `${percent}%`;
 }
 
 function hideLoadingScreen() {
-    if (!ui.loadingScreen) return;
-
-    ui.loadingScreen.classList.add("is-hidden");
+    ui.loadingScreen?.classList.add("is-hidden");
 }
 
 function showFatalError(title, error) {
     console.error(title, error);
-
-    const detail = error?.message || String(error || "Unknown error.");
-
     setStartScreenEnabled(false);
-
-    if (ui.loadingScreen) ui.loadingScreen.classList.remove("is-hidden");
+    ui.loadingScreen?.classList.remove("is-hidden");
     if (ui.loadingStatus) ui.loadingStatus.textContent = title;
     if (ui.loadingProgress) ui.loadingProgress.style.width = "100%";
     if (ui.loadingPercent) ui.loadingPercent.textContent = "Failed";
-
     if (ui.loadingError) {
         ui.loadingError.style.display = "block";
-        ui.loadingError.textContent = detail;
+        ui.loadingError.textContent = error?.message || String(error || "Unknown error.");
     }
-
     if (ui.reloadButton) {
         ui.reloadButton.style.display = "inline-block";
         ui.reloadButton.onclick = () => window.location.reload();
@@ -114,38 +93,29 @@ function showFatalError(title, error) {
 function loadHDRI(pmrem) {
     return new Promise((resolve) => {
         setLoadingProgress(10, "Loading environment...");
-
-        new RGBELoader()
-            .setPath("assets/")
-            .load(
-                "fouriesburg_mountain_midday_2k.hdr",
-                (hdrTexture) => {
-                    hdrTexture.mapping = THREE.EquirectangularReflectionMapping;
-                    hdrTexture.center.set(0.5, 0.5);
-                    hdrTexture.rotation = Math.PI / 2;
-
-                    scene.background = hdrTexture;
-                    scene.environment = pmrem.fromEquirectangular(hdrTexture).texture;
-                    pmrem.dispose();
-
-                    setLoadingProgress(25, "Environment ready...");
-                    resolve(true);
-                },
-                undefined,
-                (error) => {
-                    console.warn("HDRI failed to load. Continuing with fallback lighting.", error);
-
-                    scene.background = new THREE.Color(0x050505);
-                    scene.environment = null;
-
-                    const hemiLight = new THREE.HemisphereLight(0xffffff, 0x222222, 1.2);
-                    scene.add(hemiLight);
-
-                    pmrem.dispose();
-                    setLoadingProgress(25, "Environment fallback active...");
-                    resolve(false);
-                }
-            );
+        new RGBELoader().setPath("assets/").load(
+            "fouriesburg_mountain_midday_2k.hdr",
+            (hdrTexture) => {
+                hdrTexture.mapping = THREE.EquirectangularReflectionMapping;
+                hdrTexture.center.set(0.5, 0.5);
+                hdrTexture.rotation = Math.PI / 2;
+                scene.background = hdrTexture;
+                scene.environment = pmrem.fromEquirectangular(hdrTexture).texture;
+                pmrem.dispose();
+                setLoadingProgress(25, "Environment ready...");
+                resolve(true);
+            },
+            undefined,
+            (error) => {
+                console.warn("HDRI failed to load. Continuing with fallback lighting.", error);
+                scene.background = new THREE.Color(0x050505);
+                scene.environment = null;
+                scene.add(new THREE.HemisphereLight(0xffffff, 0x222222, 1.2));
+                pmrem.dispose();
+                setLoadingProgress(25, "Environment fallback active...");
+                resolve(false);
+            }
+        );
     });
 }
 
@@ -165,38 +135,52 @@ async function loadSceneModel() {
                 navMesh = null;
                 processModel(model);
                 scene.add(model);
-
                 setLoadingProgress(100, "Scene ready.");
                 resolve(model);
             },
             (event) => {
-                if (!event.lengthComputable || !event.total) {
-                    setLoadingProgress(55, "Loading scene...");
-                    return;
-                }
-
-                const scenePercent = (event.loaded / event.total) * 70;
-                setLoadingProgress(30 + scenePercent, "Loading scene...");
+                if (!event.lengthComputable || !event.total) return setLoadingProgress(55, "Loading scene...");
+                setLoadingProgress(30 + (event.loaded / event.total) * 70, "Loading scene...");
             },
-            (error) => {
-                reject(new Error(`Could not load assets/scene.glb. ${error?.message || "Check the file path and hosting."}`));
-            }
+            (error) => reject(new Error(`Could not load assets/scene.glb. ${error?.message || "Check the file path and hosting."}`))
         );
     });
 }
+
 function addVRButton() {
     if (document.getElementById("VRButton")) return;
     document.body.appendChild(VRButton.createButton(renderer));
 }
+
 function getCollisionTarget() {
     return collisionMesh || model;
 }
+
 function processModel(root) {
     const glassNames = ["M_Glass_Darker", "glass", "win_glass"];
 
+    function replaceMaterial(mat) {
+        if (!mat || !mat.name) return mat;
+        if (glassNames.some((name) => mat.name.includes(name))) {
+            return new THREE.MeshPhysicalMaterial({
+                color: 0xffffff,
+                transmission: 1,
+                transparent: true,
+                opacity: 0.08,
+                roughness: 0,
+                metalness: 0,
+                thickness: 0,
+                ior: 1.45,
+                depthWrite: false,
+                side: THREE.DoubleSide
+            });
+        }
+        if (mat.name.includes("Black")) return new THREE.MeshBasicMaterial({ color: 0x000000 });
+        return mat;
+    }
+
     root.traverse((child) => {
         if (!child.isMesh) return;
-
         const meshName = child.name.toLowerCase();
 
         if (meshName === "collision") {
@@ -221,54 +205,22 @@ function processModel(root) {
             return;
         }
 
-        if (Array.isArray(child.material)) {
-            child.material = child.material.map(replaceMaterial);
-        } else {
-            child.material = replaceMaterial(child.material);
-        }
+        child.material = Array.isArray(child.material)
+            ? child.material.map(replaceMaterial)
+            : replaceMaterial(child.material);
     });
 
-    if (!collisionMesh) {
-        console.info("No GLB mesh named 'collision' found. Falling back to full-scene continuous-movement collision.");
-    }
-
-    if (!navMesh) {
-        console.info("No GLB mesh named 'navmesh' found. VR teleport will stay disabled.");
-    }
-
-    function replaceMaterial(mat) {
-        if (!mat || !mat.name) return mat;
-
-        if (glassNames.some((name) => mat.name.includes(name))) {
-            return new THREE.MeshPhysicalMaterial({
-                color: 0xffffff,
-                transmission: 1,
-                transparent: true,
-                opacity: 0.08,
-                roughness: 0,
-                metalness: 0,
-                thickness: 0,
-                ior: 1.45,
-                depthWrite: false,
-                side: THREE.DoubleSide
-            });
-        }
-
-        if (mat.name.includes("Black")) {
-            return new THREE.MeshBasicMaterial({ color: 0x000000 });
-        }
-
-        return mat;
-    }
+    if (!collisionMesh) console.info("No GLB mesh named 'collision' found. Falling back to full-scene continuous-movement collision.");
+    if (!navMesh) console.info("No GLB mesh named 'navmesh' found. VR teleport will stay disabled.");
 }
 
 function createTeleportRay() {
-    const rayGeometry = new THREE.BufferGeometry().setFromPoints([
+    const geometry = new THREE.BufferGeometry().setFromPoints([
         new THREE.Vector3(0, 0, 0),
         new THREE.Vector3(0, 0, -1)
     ]);
-    const rayMaterial = new THREE.LineBasicMaterial({ transparent: true, opacity: 0.85 });
-    const ray = new THREE.Line(rayGeometry, rayMaterial);
+    const material = new THREE.LineBasicMaterial({ transparent: true, opacity: 0.85 });
+    const ray = new THREE.Line(geometry, material);
     ray.name = "right-teleport-ray";
     ray.visible = false;
     ray.scale.z = teleportRayDistance;
@@ -276,14 +228,14 @@ function createTeleportRay() {
 }
 
 function createTeleportMarker() {
-    const markerGeometry = new THREE.RingGeometry(0.22, 0.32, 48);
-    const markerMaterial = new THREE.MeshBasicMaterial({
+    const geometry = new THREE.RingGeometry(0.22, 0.32, 48);
+    const material = new THREE.MeshBasicMaterial({
         transparent: true,
         opacity: 0.9,
         side: THREE.DoubleSide,
         depthWrite: false
     });
-    const marker = new THREE.Mesh(markerGeometry, markerMaterial);
+    const marker = new THREE.Mesh(geometry, material);
     marker.name = "teleport-marker";
     marker.rotation.x = -Math.PI / 2;
     marker.visible = false;
@@ -295,13 +247,15 @@ function addVRControllers() {
 
     for (let i = 0; i < 2; i++) {
         const controller = renderer.xr.getController(i);
+        const grip = renderer.xr.getControllerGrip(i);
 
         controller.addEventListener("connected", (event) => {
             if (event.data?.handedness !== "right") return;
-            if (rightTeleportRay) return;
-
-            rightTeleportRay = createTeleportRay();
-            controller.add(rightTeleportRay);
+            rightController = controller;
+            if (!rightTeleportRay) {
+                rightTeleportRay = createTeleportRay();
+                controller.add(rightTeleportRay);
+            }
         });
 
         controller.addEventListener("disconnected", () => {
@@ -309,13 +263,12 @@ function addVRControllers() {
                 controller.remove(rightTeleportRay);
                 rightTeleportRay = null;
             }
+            if (rightController === controller) rightController = null;
         });
 
-        scene.add(controller);
-
-        const grip = renderer.xr.getControllerGrip(i);
         grip.add(controllerModelFactory.createControllerModel(grip));
-        scene.add(grip);
+        yawObject.add(controller);
+        yawObject.add(grip);
     }
 }
 
@@ -324,7 +277,6 @@ async function init() {
 
     const container = document.getElementById("container") || document.body;
     const controlsText = document.getElementById("controlsText");
-
     if (controlsText) {
         controlsText.innerText = isMobile
             ? "Left side = Move • Right side = Look"
@@ -332,20 +284,13 @@ async function init() {
     }
 
     scene = new THREE.Scene();
-
-    camera = new THREE.PerspectiveCamera(
-        75,
-        window.innerWidth / window.innerHeight,
-        0.1,
-        800
-    );
+    camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 800);
 
     renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.xr.enabled = true;
-
     container.appendChild(renderer.domElement);
 
     window.addEventListener("resize", () => {
@@ -360,20 +305,16 @@ async function init() {
     yawObject.add(pitchObject);
     pitchObject.add(camera);
     scene.add(yawObject);
-    addVRControllers();
 
+    addVRControllers();
     teleportMarker = createTeleportMarker();
     scene.add(teleportMarker);
 
     playerBaseY = SPAWN.y - playerHeight;
 
-    const pmrem = new THREE.PMREMGenerator(renderer);
-
-    await loadHDRI(pmrem);
+    await loadHDRI(new THREE.PMREMGenerator(renderer));
     await loadSceneModel();
-
     setupInputControls();
-
     renderer.setAnimationLoop(animate);
 
     setTimeout(() => {
@@ -385,26 +326,17 @@ async function init() {
 
 function setupInputControls() {
     if (!isMobile) {
-        ui.startScreen?.addEventListener("click", () => {
-            document.body.requestPointerLock();
-        });
+        ui.startScreen?.addEventListener("click", () => document.body.requestPointerLock());
 
         document.addEventListener("pointerlockchange", () => {
             if (renderer.xr.isPresenting) return;
-
-            if (document.pointerLockElement === document.body) {
-                if (ui.startScreen) ui.startScreen.style.display = "none";
-                canMove = true;
-            } else {
-                if (ui.startScreen) ui.startScreen.style.display = "flex";
-                canMove = false;
-            }
+            const locked = document.pointerLockElement === document.body;
+            if (ui.startScreen) ui.startScreen.style.display = locked ? "none" : "flex";
+            canMove = locked;
         });
 
         document.addEventListener("mousemove", (e) => {
-            if (renderer.xr.isPresenting) return;
-            if (document.pointerLockElement !== document.body) return;
-
+            if (renderer.xr.isPresenting || document.pointerLockElement !== document.body) return;
             yawObject.rotation.y -= e.movementX * 0.002;
             pitch -= e.movementY * 0.002;
             pitch = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, pitch));
@@ -414,15 +346,10 @@ function setupInputControls() {
         ui.startScreen?.addEventListener("click", async () => {
             ui.startScreen.style.display = "none";
             canMove = true;
-
             if (document.documentElement.requestFullscreen) {
-                try {
-                    await document.documentElement.requestFullscreen();
-                } catch (error) {
-                    console.warn("Fullscreen request failed. Continuing without fullscreen.", error);
-                }
+                try { await document.documentElement.requestFullscreen(); }
+                catch (error) { console.warn("Fullscreen request failed. Continuing without fullscreen.", error); }
             }
-
             setupMobileControls();
         });
     }
@@ -431,19 +358,15 @@ function setupInputControls() {
         canMove = true;
         rightTurnReady = true;
         rightTeleportReady = true;
-        if (rightTeleportRay) rightTeleportRay.visible = false;
-        if (teleportMarker) teleportMarker.visible = false;
+        hideTeleportVisuals();
         if (ui.startScreen) ui.startScreen.style.display = "none";
-
         document.exitPointerLock?.();
         yawObject.rotation.set(0, 0, 0);
         pitchObject.rotation.set(0, 0, 0);
         pitch = 0;
     });
 
-    renderer.xr.addEventListener("sessionend", () => {
-        window.location.reload();
-    });
+    renderer.xr.addEventListener("sessionend", () => window.location.reload());
 
     document.addEventListener("keydown", (e) => {
         if (e.code === "KeyW") move.forward = true;
@@ -479,10 +402,9 @@ function setupMobileControls() {
     let lastLookY = 0;
 
     document.addEventListener("touchstart", (e) => {
-        for (let touch of e.changedTouches) {
+        for (const touch of e.changedTouches) {
             if (touch.clientX < window.innerWidth / 2 && joystickTouchId === null) {
                 joystickTouchId = touch.identifier;
-
                 const rect = joystick.getBoundingClientRect();
                 centerX = rect.left + rect.width / 2;
                 centerY = rect.top + rect.height / 2;
@@ -496,16 +418,13 @@ function setupMobileControls() {
 
     document.addEventListener("touchmove", (e) => {
         e.preventDefault();
-
-        for (let touch of e.changedTouches) {
+        for (const touch of e.changedTouches) {
             if (touch.identifier === joystickTouchId) {
                 const dx = touch.clientX - centerX;
                 const dy = touch.clientY - centerY;
                 const dist = Math.min(Math.sqrt(dx * dx + dy * dy), 40);
                 const angle = Math.atan2(dy, dx);
-
                 stick.style.transform = `translate(${Math.cos(angle) * dist}px, ${Math.sin(angle) * dist}px)`;
-
                 move.forward = dy < -10;
                 move.backward = dy > 10;
                 move.left = dx < -10;
@@ -515,10 +434,8 @@ function setupMobileControls() {
             if (touch.identifier === lookTouchId) {
                 const deltaX = touch.clientX - lastLookX;
                 const deltaY = touch.clientY - lastLookY;
-
                 lastLookX = touch.clientX;
                 lastLookY = touch.clientY;
-
                 yawObject.rotation.y -= deltaX * 0.01;
                 pitch -= deltaY * 0.01;
                 pitch = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, pitch));
@@ -528,20 +445,16 @@ function setupMobileControls() {
     }, { passive: false });
 
     document.addEventListener("touchend", (e) => {
-        for (let touch of e.changedTouches) {
+        for (const touch of e.changedTouches) {
             if (touch.identifier === joystickTouchId) {
                 joystickTouchId = null;
                 stick.style.transform = "translate(0,0)";
-
                 move.forward = false;
                 move.backward = false;
                 move.left = false;
                 move.right = false;
             }
-
-            if (touch.identifier === lookTouchId) {
-                lookTouchId = null;
-            }
+            if (touch.identifier === lookTouchId) lookTouchId = null;
         }
     });
 }
@@ -556,43 +469,31 @@ function getDesktopMovementVector(delta) {
     right.crossVectors(forward, new THREE.Vector3(0, 1, 0)).normalize();
 
     const movement = new THREE.Vector3();
-
     if (move.forward) movement.add(forward);
     if (move.backward) movement.addScaledVector(forward, -1);
     if (move.left) movement.addScaledVector(right, -1);
     if (move.right) movement.add(right);
 
-    if (movement.length() > 0) {
-        movement.normalize();
-        movement.multiplyScalar(speed * delta);
-    }
-
+    if (movement.length() > 0) movement.normalize().multiplyScalar(speed * delta);
     return movement;
 }
 
 function getRightInputSource() {
     const session = renderer.xr.getSession();
     if (!session) return null;
-
     for (const source of session.inputSources) {
         if (source.handedness === "right") return source;
     }
-
     return null;
 }
 
 function getRightStickAxes() {
     const source = getRightInputSource();
-    if (!source) return { x: 0, y: 0 };
-
-    const gamepad = source.gamepad;
+    const gamepad = source?.gamepad;
     if (!gamepad || !gamepad.axes || gamepad.axes.length < 2) return { x: 0, y: 0 };
-
-    if (gamepad.axes.length >= 4) {
-        return { x: gamepad.axes[2], y: gamepad.axes[3] };
-    }
-
-    return { x: gamepad.axes[0], y: gamepad.axes[1] };
+    return gamepad.axes.length >= 4
+        ? { x: gamepad.axes[2], y: gamepad.axes[3] }
+        : { x: gamepad.axes[0], y: gamepad.axes[1] };
 }
 
 function rotateRigAroundHead(angle) {
@@ -612,43 +513,32 @@ function handleRightStickTurn(turnX) {
         rightTurnReady = true;
         return;
     }
-
     if (!rightTurnReady || Math.abs(turnX) < rightTurnThreshold) return;
-
     rotateRigAroundHead(turnX > 0 ? -rightTurnAngle : rightTurnAngle);
     rightTurnReady = false;
 }
 
-function getRightControllerRay(frame) {
-    if (!frame) return null;
+function getRightControllerRay() {
+    if (!rightController) return null;
+    rightController.updateMatrixWorld(true);
 
-    const source = getRightInputSource();
-    const referenceSpace = renderer.xr.getReferenceSpace();
-    if (!source || !source.targetRaySpace || !referenceSpace) return null;
+    const origin = new THREE.Vector3();
+    const direction = new THREE.Vector3(0, 0, -1);
+    const quaternion = new THREE.Quaternion();
 
-    const pose = frame.getPose(source.targetRaySpace, referenceSpace);
-    if (!pose) return null;
-
-    const matrix = new THREE.Matrix4().fromArray(pose.transform.matrix);
-    const origin = new THREE.Vector3().setFromMatrixPosition(matrix);
-    const direction = new THREE.Vector3(0, 0, -1).transformDirection(matrix).normalize();
+    rightController.getWorldPosition(origin);
+    rightController.getWorldQuaternion(quaternion);
+    direction.applyQuaternion(quaternion).normalize();
 
     return { origin, direction };
 }
 
-function getNavmeshHitFromRightController(frame) {
+function getNavmeshHitFromRightController() {
     if (!navMesh) return null;
-
-    const controllerRay = getRightControllerRay(frame);
+    const controllerRay = getRightControllerRay();
     if (!controllerRay) return null;
 
-    const raycaster = new THREE.Raycaster(
-        controllerRay.origin,
-        controllerRay.direction,
-        0,
-        teleportRayDistance
-    );
-
+    const raycaster = new THREE.Raycaster(controllerRay.origin, controllerRay.direction, 0, teleportRayDistance);
     const hits = raycaster
         .intersectObject(navMesh, true)
         .filter((hit) => !hit.object.userData.ignoreCollision);
@@ -663,30 +553,20 @@ function hideTeleportVisuals() {
 
 function updateTeleportMarker(hit) {
     if (!teleportMarker) return;
-
     teleportMarker.visible = false;
     if (!hit) return;
-
     teleportMarker.visible = true;
-    teleportMarker.position.set(
-        hit.point.x,
-        hit.point.y + teleportMarkerYOffset,
-        hit.point.z
-    );
+    teleportMarker.position.set(hit.point.x, hit.point.y + teleportMarkerYOffset, hit.point.z);
     teleportMarker.rotation.set(-Math.PI / 2, 0, 0);
 }
 
-function updateTeleportRay(frame, stickY) {
-    if (!rightTeleportRay) return;
-
+function updateTeleportRay(stickY) {
     hideTeleportVisuals();
-
-    if (!renderer.xr.isPresenting) return;
+    if (!rightTeleportRay || !renderer.xr.isPresenting) return;
     if (stickY > rightTeleportResetThreshold) return;
 
     rightTeleportRay.visible = true;
-
-    const hit = getNavmeshHitFromRightController(frame);
+    const hit = getNavmeshHitFromRightController();
     rightTeleportRay.scale.z = hit ? hit.distance : teleportRayDistance;
     updateTeleportMarker(hit);
 }
@@ -700,34 +580,27 @@ function teleportToNavmeshHit(hit) {
     const headOffsetZ = headPosition.z - yawObject.position.z;
 
     playerBaseY = hit.point.y;
-    yawObject.position.set(
-        hit.point.x - headOffsetX,
-        playerBaseY,
-        hit.point.z - headOffsetZ
-    );
+    yawObject.position.set(hit.point.x - headOffsetX, playerBaseY, hit.point.z - headOffsetZ);
 }
 
-function handleRightStickTeleport(frame, stickY) {
-    updateTeleportRay(frame, stickY);
+function handleRightStickTeleport(stickY) {
+    updateTeleportRay(stickY);
 
     if (stickY > rightTeleportResetThreshold) {
         rightTeleportReady = true;
         return;
     }
-
     if (!rightTeleportReady || stickY > rightTeleportThreshold) return;
     rightTeleportReady = false;
 
-    const hit = getNavmeshHitFromRightController(frame);
-    if (!hit) return;
-
-    teleportToNavmeshHit(hit);
+    const hit = getNavmeshHitFromRightController();
+    if (hit) teleportToNavmeshHit(hit);
 }
 
-function handleVRRightStickActions(frame) {
+function handleVRRightStickActions() {
     const axes = getRightStickAxes();
     handleRightStickTurn(axes.x);
-    handleRightStickTeleport(frame, axes.y);
+    handleRightStickTeleport(axes.y);
 }
 
 function getVRMovementVector(delta) {
@@ -738,33 +611,22 @@ function getVRMovementVector(delta) {
 
     for (const source of session.inputSources) {
         if (source.handedness === "right") continue;
-
         const gamepad = source.gamepad;
         if (!gamepad || !gamepad.axes || gamepad.axes.length < 2) continue;
 
-        let x = 0;
-        let y = 0;
-
-        if (gamepad.axes.length >= 4) {
-            x = gamepad.axes[2];
-            y = gamepad.axes[3];
-        } else {
-            x = gamepad.axes[0];
-            y = gamepad.axes[1];
-        }
+        let x = gamepad.axes.length >= 4 ? gamepad.axes[2] : gamepad.axes[0];
+        let y = gamepad.axes.length >= 4 ? gamepad.axes[3] : gamepad.axes[1];
 
         const deadzone = 0.15;
         if (Math.abs(x) < deadzone) x = 0;
         if (Math.abs(y) < deadzone) y = 0;
         if (x === 0 && y === 0) continue;
 
-        const forward = new THREE.Vector3(0, 0, -1)
-            .applyQuaternion(yawObject.quaternion);
+        const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(yawObject.quaternion);
         forward.y = 0;
         forward.normalize();
 
-        const right = new THREE.Vector3(1, 0, 0)
-            .applyQuaternion(yawObject.quaternion);
+        const right = new THREE.Vector3(1, 0, 0).applyQuaternion(yawObject.quaternion);
         right.y = 0;
         right.normalize();
 
@@ -772,11 +634,7 @@ function getVRMovementVector(delta) {
         movement.addScaledVector(right, x);
     }
 
-    if (movement.length() > 0) {
-        movement.normalize();
-        movement.multiplyScalar(vrSpeed * delta);
-    }
-
+    if (movement.length() > 0) movement.normalize().multiplyScalar(vrSpeed * delta);
     return movement;
 }
 
@@ -799,9 +657,7 @@ function applyMovement(movement) {
             .intersectObject(collisionTarget, true)
             .filter((hit) => !hit.object.userData.ignoreCollision);
 
-        if (hits.length === 0) {
-            yawObject.position.copy(proposed);
-        }
+        if (hits.length === 0) yawObject.position.copy(proposed);
     }
 
     const footRay = new THREE.Raycaster(
@@ -815,24 +671,19 @@ function applyMovement(movement) {
         .intersectObject(collisionTarget, true)
         .filter((hit) => !hit.object.userData.ignoreCollision);
 
-    if (groundHits.length > 0) {
-        playerBaseY = groundHits[0].point.y;
-    }
+    if (groundHits.length > 0) playerBaseY = groundHits[0].point.y;
 
     yawObject.position.y = renderer.xr.isPresenting
         ? playerBaseY
         : playerBaseY + playerHeight;
 }
 
-function animate(time, frame) {
+function animate() {
     const delta = clock.getDelta();
 
     if (canMove && model) {
-        if (renderer.xr.isPresenting) {
-            handleVRRightStickActions(frame);
-        } else {
-            hideTeleportVisuals();
-        }
+        if (renderer.xr.isPresenting) handleVRRightStickActions();
+        else hideTeleportVisuals();
 
         const movement = renderer.xr.isPresenting
             ? getVRMovementVector(delta)
