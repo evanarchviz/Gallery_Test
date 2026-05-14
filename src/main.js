@@ -8,6 +8,7 @@ import { XRControllerModelFactory } from "https://unpkg.com/three@0.160.0/exampl
 let scene, camera, renderer, model, yawObject, pitchObject;
 let collisionMesh = null;
 let navMesh = null;
+let navMeshes = [];
 let rightController = null;
 let rightTeleportRay = null;
 let teleportMarker = null;
@@ -133,6 +134,7 @@ async function loadSceneModel() {
                 model = gltf.scene;
                 collisionMesh = null;
                 navMesh = null;
+                navMeshes = [];
                 processModel(model);
                 scene.add(model);
                 setLoadingProgress(100, "Scene ready.");
@@ -158,7 +160,6 @@ function getCollisionTarget() {
 
 function makeMeshDoubleSided(mesh) {
     const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-
     for (const material of materials) {
         if (!material) continue;
         material.side = THREE.DoubleSide;
@@ -193,20 +194,21 @@ function processModel(root) {
         if (!child.isMesh) return;
         const meshName = child.name.toLowerCase();
 
-        if (meshName === "collision" || meshName.startsWith("collision.")) {
+        if (meshName.includes("collision")) {
             collisionMesh = child;
             child.visible = false;
             child.userData.ignoreCollision = false;
-            console.info("Using GLB mesh named 'collision' as the sole continuous-movement collision target.");
+            console.info("Using GLB mesh containing 'collision' as the continuous-movement collision target:", child.name);
             return;
         }
 
-        if (meshName === "navmesh" || meshName.startsWith("navmesh.")) {
-            navMesh = child;
+        if (meshName.includes("navmesh")) {
+            if (!navMesh) navMesh = child;
+            navMeshes.push(child);
             child.visible = false;
             child.userData.ignoreCollision = true;
             makeMeshDoubleSided(child);
-            console.info("Using GLB mesh named 'navmesh' as the VR teleport target.");
+            console.info("Using GLB mesh containing 'navmesh' as a VR teleport target:", child.name);
             return;
         }
 
@@ -221,8 +223,9 @@ function processModel(root) {
             : replaceMaterial(child.material);
     });
 
-    if (!collisionMesh) console.info("No GLB mesh named 'collision' found. Falling back to full-scene continuous-movement collision.");
-    if (!navMesh) console.info("No GLB mesh named 'navmesh' found. VR teleport will stay disabled.");
+    if (!collisionMesh) console.info("No GLB mesh containing 'collision' found. Falling back to full-scene continuous-movement collision.");
+    if (navMeshes.length === 0) console.info("No GLB mesh containing 'navmesh' found. VR teleport will stay disabled.");
+    else console.info(`VR teleport navmesh targets found: ${navMeshes.length}`);
 }
 
 function createTeleportRay() {
@@ -545,12 +548,16 @@ function getRightControllerRay() {
 }
 
 function getNavmeshHitFromRightController() {
-    if (!navMesh) return null;
+    if (navMeshes.length === 0) return null;
     const controllerRay = getRightControllerRay();
     if (!controllerRay) return null;
 
+    for (const mesh of navMeshes) {
+        mesh.updateMatrixWorld(true);
+    }
+
     const raycaster = new THREE.Raycaster(controllerRay.origin, controllerRay.direction, 0, teleportRayDistance);
-    const hits = raycaster.intersectObject(navMesh, true);
+    const hits = raycaster.intersectObjects(navMeshes, true);
 
     return hits.length > 0 ? hits[0] : null;
 }
