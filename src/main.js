@@ -634,14 +634,15 @@ function getVRMovementVector(delta) {
         if (Math.abs(y) < deadzone) y = 0;
         if (x === 0 && y === 0) continue;
 
-        const xrCamera = renderer.xr.getCamera(camera);
-        const forward = new THREE.Vector3();
-        xrCamera.getWorldDirection(forward);
+        const forward = new THREE.Vector3(0, 0, -1)
+            .applyQuaternion(yawObject.quaternion);
         forward.y = 0;
         forward.normalize();
 
-        const right = new THREE.Vector3();
-        right.crossVectors(forward, new THREE.Vector3(0, 1, 0)).normalize();
+        const right = new THREE.Vector3(1, 0, 0)
+            .applyQuaternion(yawObject.quaternion);
+        right.y = 0;
+        right.normalize();
 
         movement.addScaledVector(forward, -y);
         movement.addScaledVector(right, x);
