@@ -22,6 +22,8 @@ let canMove = false;
 let isMobile = false;
 let pitch = 0;
 let playerBaseY = 0;
+let verticalVelocity = 0;
+let isGrounded = false;
 let rightTurnReady = true;
 
 const playerHeight = 1.7;
@@ -29,6 +31,9 @@ const playerRadius = 0.35;
 const speed = 2;
 const vrSpeed = 2;
 const stepHeight = 0.2;
+const gravity = 9.8;
+const maxFallSpeed = 18;
+const groundSnapDownDistance = 0.28;
 const rightTurnAngle = THREE.MathUtils.degToRad(30);
 const rightTurnThreshold = 0.75;
 const rightTurnResetThreshold = 0.25;
@@ -395,6 +400,8 @@ async function init() {
     scene.add(teleportMarker);
 
     playerBaseY = SPAWN.y - playerHeight;
+    verticalVelocity = 0;
+    isGrounded = false;
 
     await loadHDRI(new THREE.PMREMGenerator(renderer));
     await loadSceneModel();
@@ -443,6 +450,8 @@ function setupInputControls() {
         rightTurnReady = true;
         teleportReleaseReady = false;
         pendingTeleportHit = null;
+        verticalVelocity = 0;
+        isGrounded = false;
         hideTeleportVisuals();
         if (ui.startScreen) ui.startScreen.style.display = "none";
         document.exitPointerLock?.();
@@ -671,6 +680,8 @@ function updateTeleportAim(stickY) {
 
 function teleportToNavmeshHit(hit) {
     playerBaseY = hit.point.y;
+    verticalVelocity = 0;
+    isGrounded = true;
     yawObject.position.set(hit.point.x, playerBaseY, hit.point.z);
 }
 
@@ -778,7 +789,57 @@ function getVRMovementVector(delta, frame) {
     return movement;
 }
 
-function applyMovement(movement) {
+function getGroundHit(maxDistance) {
+    const collisionTarget = getCollisionTarget();
+    if (!collisionTarget) return null;
+
+    const raycaster = new THREE.Raycaster(
+        new THREE.Vector3(yawObject.position.x, playerBaseY + stepHeight, yawObject.position.z),
+        new THREE.Vector3(0, -1, 0),
+        0,
+        maxDistance
+    );
+
+    const hits = raycaster
+        .intersectObject(collisionTarget, true)
+        .filter((hit) => !hit.object.userData.ignoreCollision);
+
+    return hits.length > 0 ? hits[0] : null;
+}
+
+function updateVerticalPosition(delta) {
+    const nearbyGroundHit = getGroundHit(stepHeight + groundSnapDownDistance);
+
+    if (nearbyGroundHit && verticalVelocity <= 0) {
+        const groundY = nearbyGroundHit.point.y;
+        const groundDelta = groundY - playerBaseY;
+
+        if (groundDelta <= stepHeight && groundDelta >= -groundSnapDownDistance) {
+            playerBaseY = groundY;
+            verticalVelocity = 0;
+            isGrounded = true;
+            return;
+        }
+    }
+
+    isGrounded = false;
+    verticalVelocity = Math.max(verticalVelocity - gravity * delta, -maxFallSpeed);
+    playerBaseY += verticalVelocity * delta;
+
+    const landingHit = getGroundHit(stepHeight + Math.abs(verticalVelocity * delta) + groundSnapDownDistance);
+    if (landingHit && verticalVelocity <= 0) {
+        const groundY = landingHit.point.y;
+        const groundDelta = groundY - playerBaseY;
+
+        if (groundDelta <= stepHeight && groundDelta >= -groundSnapDownDistance) {
+            playerBaseY = groundY;
+            verticalVelocity = 0;
+            isGrounded = true;
+        }
+    }
+}
+
+function applyMovement(movement, delta) {
     const collisionTarget = getCollisionTarget();
     if (!collisionTarget) return;
 
@@ -800,18 +861,7 @@ function applyMovement(movement) {
         if (hits.length === 0) yawObject.position.copy(proposed);
     }
 
-    const footRay = new THREE.Raycaster(
-        new THREE.Vector3(yawObject.position.x, playerBaseY + stepHeight, yawObject.position.z),
-        new THREE.Vector3(0, -1, 0),
-        0,
-        stepHeight + 0.5
-    );
-
-    const groundHits = footRay
-        .intersectObject(collisionTarget, true)
-        .filter((hit) => !hit.object.userData.ignoreCollision);
-
-    if (groundHits.length > 0) playerBaseY = groundHits[0].point.y;
+    updateVerticalPosition(delta);
 
     yawObject.position.y = renderer.xr.isPresenting
         ? playerBaseY
@@ -831,7 +881,7 @@ function animate(time, frame) {
             ? getVRMovementVector(delta, frame)
             : getDesktopMovementVector(delta);
 
-        applyMovement(movement);
+        applyMovement(movement, delta);
     }
 
     renderer.render(scene, camera);
