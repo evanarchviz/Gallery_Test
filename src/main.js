@@ -270,11 +270,11 @@ async function init() {
 
     renderer.setAnimationLoop(animate);
 
-setTimeout(() => {
-    hideLoadingScreen();
-    setStartScreenEnabled(true);
-    addVRButton();
-}, 250);
+    setTimeout(() => {
+        hideLoadingScreen();
+        setStartScreenEnabled(true);
+        addVRButton();
+    }, 250);
 }
 
 function setupInputControls() {
@@ -332,8 +332,7 @@ function setupInputControls() {
     });
 
     renderer.xr.addEventListener("sessionend", () => {
-        canMove = false;
-        if (ui.startScreen) ui.startScreen.style.display = "flex";
+        window.location.reload();
     });
 
     document.addEventListener("keydown", (e) => {
