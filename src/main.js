@@ -10,6 +10,7 @@ let model;
 let collisionMesh = null;
 let navMesh = null;
 let rightTeleportRay = null;
+let teleportMarker = null;
 let clock = new THREE.Clock();
 
 let move = {
@@ -39,6 +40,7 @@ const rightTurnResetThreshold = 0.25;
 const rightTeleportThreshold = -0.75;
 const rightTeleportResetThreshold = -0.25;
 const teleportRayDistance = 25;
+const teleportMarkerYOffset = 0.025;
 
 const SPAWN = new THREE.Vector3(0, 1.5, 0);
 
@@ -273,6 +275,21 @@ function createTeleportRay() {
     return ray;
 }
 
+function createTeleportMarker() {
+    const markerGeometry = new THREE.RingGeometry(0.22, 0.32, 48);
+    const markerMaterial = new THREE.MeshBasicMaterial({
+        transparent: true,
+        opacity: 0.9,
+        side: THREE.DoubleSide,
+        depthWrite: false
+    });
+    const marker = new THREE.Mesh(markerGeometry, markerMaterial);
+    marker.name = "teleport-marker";
+    marker.rotation.x = -Math.PI / 2;
+    marker.visible = false;
+    return marker;
+}
+
 function addVRControllers() {
     const controllerModelFactory = new XRControllerModelFactory();
 
@@ -345,6 +362,9 @@ async function init() {
     scene.add(yawObject);
     addVRControllers();
 
+    teleportMarker = createTeleportMarker();
+    scene.add(teleportMarker);
+
     playerBaseY = SPAWN.y - playerHeight;
 
     const pmrem = new THREE.PMREMGenerator(renderer);
@@ -412,6 +432,7 @@ function setupInputControls() {
         rightTurnReady = true;
         rightTeleportReady = true;
         if (rightTeleportRay) rightTeleportRay.visible = false;
+        if (teleportMarker) teleportMarker.visible = false;
         if (ui.startScreen) ui.startScreen.style.display = "none";
 
         document.exitPointerLock?.();
@@ -635,10 +656,30 @@ function getNavmeshHitFromRightController(frame) {
     return hits.length > 0 ? hits[0] : null;
 }
 
+function hideTeleportVisuals() {
+    if (rightTeleportRay) rightTeleportRay.visible = false;
+    if (teleportMarker) teleportMarker.visible = false;
+}
+
+function updateTeleportMarker(hit) {
+    if (!teleportMarker) return;
+
+    teleportMarker.visible = false;
+    if (!hit) return;
+
+    teleportMarker.visible = true;
+    teleportMarker.position.set(
+        hit.point.x,
+        hit.point.y + teleportMarkerYOffset,
+        hit.point.z
+    );
+    teleportMarker.rotation.set(-Math.PI / 2, 0, 0);
+}
+
 function updateTeleportRay(frame, stickY) {
     if (!rightTeleportRay) return;
 
-    rightTeleportRay.visible = false;
+    hideTeleportVisuals();
 
     if (!renderer.xr.isPresenting) return;
     if (stickY > rightTeleportResetThreshold) return;
@@ -647,6 +688,7 @@ function updateTeleportRay(frame, stickY) {
 
     const hit = getNavmeshHitFromRightController(frame);
     rightTeleportRay.scale.z = hit ? hit.distance : teleportRayDistance;
+    updateTeleportMarker(hit);
 }
 
 function teleportToNavmeshHit(hit) {
@@ -788,8 +830,8 @@ function animate(time, frame) {
     if (canMove && model) {
         if (renderer.xr.isPresenting) {
             handleVRRightStickActions(frame);
-        } else if (rightTeleportRay) {
-            rightTeleportRay.visible = false;
+        } else {
+            hideTeleportVisuals();
         }
 
         const movement = renderer.xr.isPresenting
