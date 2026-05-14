@@ -6,6 +6,7 @@ import { VRButton } from "https://unpkg.com/three@0.160.0/examples/jsm/webxr/VRB
 
 let scene, camera, renderer;
 let model;
+let collisionMesh = null;
 let clock = new THREE.Clock();
 
 let move = {
@@ -151,6 +152,7 @@ async function loadSceneModel() {
             "assets/scene.glb",
             (gltf) => {
                 model = gltf.scene;
+                collisionMesh = null;
                 processModel(model);
                 scene.add(model);
 
@@ -176,11 +178,22 @@ function addVRButton() {
     if (document.getElementById("VRButton")) return;
     document.body.appendChild(VRButton.createButton(renderer));
 }
+function getCollisionTarget() {
+    return collisionMesh || model;
+}
 function processModel(root) {
     const glassNames = ["M_Glass_Darker", "glass", "win_glass"];
 
     root.traverse((child) => {
         if (!child.isMesh) return;
+
+        if (child.name.toLowerCase() === "collision") {
+            collisionMesh = child;
+            child.visible = false;
+            child.userData.ignoreCollision = false;
+            console.info("Using GLB mesh named 'collision' as the sole continuous-movement collision target.");
+            return;
+        }
 
         if (child.name === "Cube") {
             child.visible = false;
@@ -194,6 +207,10 @@ function processModel(root) {
             child.material = replaceMaterial(child.material);
         }
     });
+
+    if (!collisionMesh) {
+        console.info("No GLB mesh named 'collision' found. Falling back to full-scene continuous-movement collision.");
+    }
 
     function replaceMaterial(mat) {
         if (!mat || !mat.name) return mat;
@@ -557,7 +574,8 @@ function getVRMovementVector(delta) {
 }
 
 function applyMovement(movement) {
-    if (!model) return;
+    const collisionTarget = getCollisionTarget();
+    if (!collisionTarget) return;
 
     const proposed = yawObject.position.clone().add(movement);
 
@@ -571,7 +589,7 @@ function applyMovement(movement) {
         );
 
         const hits = ray
-            .intersectObject(model, true)
+            .intersectObject(collisionTarget, true)
             .filter((hit) => !hit.object.userData.ignoreCollision);
 
         if (hits.length === 0) {
@@ -587,7 +605,7 @@ function applyMovement(movement) {
     );
 
     const groundHits = footRay
-        .intersectObject(model, true)
+        .intersectObject(collisionTarget, true)
         .filter((hit) => !hit.object.userData.ignoreCollision);
 
     if (groundHits.length > 0) {
